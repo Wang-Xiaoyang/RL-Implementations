@@ -33,7 +33,7 @@ for ii in range(n_eps):
     total_reward = 0.0
     done = False
     while not done:
-        env.render()
+        # env.render()
         # epsilon-greedy
         if np.random.uniform(0,1) >= epsilon:
             a = np.argmax(q_table[ob])
@@ -60,7 +60,23 @@ def smooth_reward(ep_reward, smooth_over):
 
 plt.plot(smooth_reward(ep_reward, 100))
 plt.title('smoothed reward over 100 episodes')
-plt.show()
+# plt.show()
 
 print('average score of the last 100 eps: ', np.mean(ep_reward[-100:]))
 print('average score of all episodes: ', np.mean(ep_reward))
+
+# game performance
+ep_reward_validation = []
+for ii in range(100):
+    ob = env.reset()
+    total_reward = 0.0
+    done = False
+    while not done:
+        a = np.argmax(q_table[ob])
+        ob_, r, done, _ = env.step(a)
+        total_reward += r
+        ob = ob_
+    ep_reward_validation.append(total_reward)
+
+print('game score over 100 eps: ', np.mean(ep_reward_validation))
+final_score.append(np.mean(ep_reward_validation))
