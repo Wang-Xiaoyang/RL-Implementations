@@ -38,15 +38,30 @@ class Memory():
                                replace=False)
         return [self.buffer[ii] for ii in idx]
 
+def model_validate():
+    ep_reward = 0
+    ob = env.reset()
+    done = False
+    while not done:
+        # validate model for current Q network        
+        ob_tensor = torch.FloatTensor([ob])
+        a = Q(ob_tensor).max(1)[1].detach()
+        a = a.data.numpy()[0]
+        ob_, r, done, _ = env.step(a)
+        ep_reward += r
+        ob = ob_
+    return ep_reward
+
 N_EPS = 1000
 BUFFER_LEN = 1000
 BATCH_SIZE = 100
 GAMMA = 0.95
 LEARNING_RATE = 0.01
 UPDATE_STEP = 10
+T = 100
 epsilon_s = 1.0
-epsilon_decay = 0.995
-
+epsilon_e = 0.01
+epsilon_step = (epsilon_s - epsilon_e) / N_EPS
 
 env = gym.make('CartPole-v0')
 
@@ -73,19 +88,19 @@ ep_rewards = []
 for ii in range(N_EPS):
     ob = env.reset()
     done = False
-    ep_reward = 0
-    while not done:
+    for jj in range(T):
         # epsilon greedy
         if np.random.uniform(0,1) >= epsilon:
             ob_tensor = torch.FloatTensor([ob])
-            a = Q(ob_tensor).max(1)[1].data.numpy()[0]
+            a = Q(ob_tensor).max(1)[1].detach()
+            a = a.data.numpy()[0]
         else:
             a = env.action_space.sample()
         ob_, r, done, _ = env.step(a)
-        ep_reward += r
         # add to memory
         memory.add((ob, a, r, ob_))
         ob = ob_
+
         if len(memory.buffer) > BATCH_SIZE:
             batch = memory.sample(BATCH_SIZE)
             # get state, action, reward and the next state
@@ -96,9 +111,10 @@ for ii in range(N_EPS):
             
             # if next state is the terminal state
             non_final_next_states = torch.cat([s for s in states_ if s is not None])
-            non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, states_))) # ?
+            non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, states_))) # 
             q_targets = rewards
-            q_targets[non_final_mask] = rewards + GAMMA * Q_.forward(states_).max(1)[0]
+            next_q_values = Q_(states_).max(1)[0].detach()
+            q_targets[non_final_mask] += GAMMA * next_q_values[non_final_mask]
             # q_targets = rewards + GAMMA * Q_.forward(states_).max(1)[0]
             q_targets = torch.unsqueeze(q_targets, 1)
             q_values = Q(states).gather(1, actions.unsqueeze(1))
@@ -113,9 +129,17 @@ for ii in range(N_EPS):
                 Q_.load_state_dict(Q.state_dict())
             step += 1
     
-    epsilon *= epsilon_decay
+    epsilon -= epsilon_step
+    ep_reward = model_validate()
     ep_rewards.append(ep_reward)
-    print('Episode: ', ii, '  Total reward: ', ep_reward)
+    print('Episode: ', ii, '  Total reward: ', ep_reward, 'Epsilon: ', epsilon)
 
-plt.plot(ep_rewards)
+# smmothed reward
+def smooth_reward(ep_reward, smooth_over):
+    smoothed_r = []
+    for ii in range(smooth_over, len(ep_reward)):
+        smoothed_r.append(np.mean(ep_reward[ii-smooth_over:ii]))
+    return smoothed_r
+
+plt.plot(smooth_reward(ep_rewards, 10))
 plt.show()
