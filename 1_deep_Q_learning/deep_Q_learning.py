@@ -1,5 +1,5 @@
 # Deep Q Learning using Pytorch
-# CartPole in Gym environment
+# CartPole-v0 in Gym environment
 # Algorithm can be found in https://storage.googleapis.com/deepmind-media/dqn/DQNNaturePaper.pdf
 
 import torch
