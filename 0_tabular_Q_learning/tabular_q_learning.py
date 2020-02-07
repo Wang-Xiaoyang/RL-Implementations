@@ -1,5 +1,5 @@
 """
-Implementation 1: Tabular Q learning
+Implementation 0: Tabular Q learning
 Env: FrozenLake-V0 in https://gym.openai.com/envs/#toy_text
 Reference: http://www.incompleteideas.net/book/RLbook2018.pdf
 """
