@@ -11,4 +11,10 @@ confidence_map_MCT_1M_rollouts.png: the Monte-Carlo confidence map (values) of e
 ## 1 - Deep Q Learning
 deep_Q_learning.py: solving CartPole-v0 using deep Q learning, implemented with Pytorch.
 
-rewards.png: episode rewards for 5k training episodes.
+rewards.png: episode rewards for 5k training episodes using DQN.
+
+deep_Q_learning_extension.py: solving CartPole-v0 using improved DQN, here double DQN is implemented.
+
+rewards_double_DQN.png: episode rewards for 10k training episodes using double DQN.
+
+
