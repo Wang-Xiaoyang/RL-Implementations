@@ -10,6 +10,9 @@ import numpy as np
 from collections import deque
 import matplotlib.pyplot as plt
 
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
+
 # Q networks
 class Q_network(nn.Module):
     def __init__(self, input=4, hidden=64, output=2):
@@ -41,9 +44,9 @@ class Memory():
 def choose_action(ob, epsilon):
     # choose action using epsilon greedy given the current ob
     if np.random.uniform(0,1) >= epsilon:
-        ob_tensor = torch.FloatTensor([ob])
-        a = Q(ob_tensor).max(1)[1].detach()
-        a = a.data.numpy()[0]
+        ob_tensor = torch.FloatTensor([ob]).to(device)
+        a = Q(ob_tensor).argmax(1).detach()
+        a = a.cpu().numpy()[0]
     else:
         a = env.action_space.sample()
     return a
@@ -54,9 +57,9 @@ def model_validate():
     done = False
     while not done:
         # validate model for current Q network        
-        ob_tensor = torch.FloatTensor([ob])
-        a = Q(ob_tensor).max(1)[1].detach()
-        a = a.data.numpy()[0]
+        ob_tensor = torch.FloatTensor([ob]).to(device=device)
+        a = Q(ob_tensor).argmax(1)
+        a = a.cpu().numpy()[0]
         ob_, r, done, _ = env.step(a)
         ep_reward += r
         ob = ob_
@@ -81,14 +84,14 @@ state_length = env.observation_space.shape[0]
 memory = Memory(max_size=BUFFER_LEN)
 
 # initialize action-value and target action-value function: Q, Q^
-Q = Q_network(input=state_length, output=n_actions)
-Q_ = Q_network(input=state_length, output=n_actions)
+Q = Q_network(input=state_length, output=n_actions).to(device)
+Q_ = Q_network(input=state_length, output=n_actions).to(device)
 # copy parameters
 Q_.load_state_dict(Q.state_dict())
 # define optimizer
 optimizer = torch.optim.Adam(Q.parameters(), lr=LEARNING_RATE)
 # define loss
-loss_MSE = nn.MSELoss()
+loss_MSE = nn.MSELoss().to(device)
 
 epsilon = epsilon_max
 
@@ -106,17 +109,17 @@ for ii in range(N_EPS):
     if len(memory.buffer) >= BATCH_SIZE:
         batch = memory.sample(BATCH_SIZE)
         # get state, action, reward and the next state
-        states = torch.FloatTensor([item[0] for item in batch])
-        actions = torch.LongTensor([item[1] for item in batch])
-        rewards = torch.FloatTensor([item[2] for item in batch])
-        states_ = torch.FloatTensor([item[3] for item in batch])
+        states = torch.FloatTensor([item[0] for item in batch]).to(device)
+        actions = torch.cuda.LongTensor([item[1] for item in batch]).to(device)
+        rewards = torch.FloatTensor([item[2] for item in batch]).to(device)
+        states_ = torch.FloatTensor([item[3] for item in batch]).to(device)
         done = [item[4] for item in batch]
 
         # if next state is the terminal state
-        non_final_mask = torch.tensor(list(map(lambda s: s is not True, done)), dtype=torch.float32) #
+        non_final_mask = torch.tensor(list(map(lambda s: s is not True, done)), dtype=torch.float32).to(device) #
         next_q_values = Q_(states_).max(1)[0].detach()
-        q_targets = rewards + GAMMA * torch.mul(next_q_values, non_final_mask) 
-        q_targets = torch.unsqueeze(q_targets, 1)
+        q_targets = rewards + GAMMA * torch.mul(next_q_values, non_final_mask).to(device) 
+        q_targets = torch.unsqueeze(q_targets, 1).to(device)
         q_values = Q(states).gather(1, actions.unsqueeze(1))
 
         # one step of back prop

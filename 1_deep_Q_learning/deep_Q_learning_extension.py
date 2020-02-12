@@ -64,15 +64,16 @@ def model_validate():
         ob = ob_
     return ep_reward
 
-N_EPS = 5000
-BUFFER_LEN = 5000
-BATCH_SIZE = 100
+N_EPS = 10000
+BUFFER_LEN = 10000
+BATCH_SIZE = 64
 GAMMA = 0.95
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.0001
 UPDATE_STEP = 200
 epsilon_max = 1.0
 epsilon_min = 0.001
 epsilon_step = (epsilon_max - epsilon_min) / N_EPS # how to decay epsilon
+epsilon_decay = 0.9997
 
 env = gym.make('CartPole-v0')
 
@@ -119,7 +120,7 @@ for ii in range(N_EPS):
         # q_targets is the main difference between DQN and double DQN
         next_as = Q(states_).max(1)[1].detach() # next actions according to Q
         next_q_values = Q_(states_).gather(1, next_as.unsqueeze(1))
-        q_targets = rewards + GAMMA * torch.mul(next_q_values, non_final_mask)
+        q_targets = rewards + GAMMA * torch.mul(next_q_values.squeeze(), non_final_mask)
         q_targets = torch.unsqueeze(q_targets, 1)
         q_values = Q(states).gather(1, actions.unsqueeze(1))
 
@@ -133,7 +134,8 @@ for ii in range(N_EPS):
             Q_.load_state_dict(Q.state_dict())
         step += 1
     
-    epsilon = max((epsilon-epsilon_step), epsilon_min)
+    # epsilon = max((epsilon-epsilon_step), epsilon_min)
+    epsilon = max(epsilon * epsilon_decay, epsilon_min)
     ep_reward = model_validate()
     ep_rewards.append(ep_reward)
     print('Episode: ', ii, '  Total reward: ', ep_reward, 'Epsilon: ', epsilon)
