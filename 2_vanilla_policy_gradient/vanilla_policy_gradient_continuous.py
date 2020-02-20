@@ -48,7 +48,7 @@ def choose_action(ob):
     return a
 
 def compute_advantage(rewards, states, gamma):
-    # get returns of states from a trajectory as state-value
+    # get returns of states from a trajectory
     # R_t = r_t + gamma * r_{t+1} + gamma^2 * r_{t+2} + ...
     returns = rewards.copy()
     advs = rewards.copy()
@@ -59,7 +59,11 @@ def compute_advantage(rewards, states, gamma):
     states_ep = torch.tensor(states_ep, dtype=torch.float32).to(device)
     returns = torch.tensor(returns, dtype=torch.float32).to(device)
     advs = returns - V(states_ep).squeeze(1)
+    # for j in range(len(states_ep)):
+    #     adv = returns[j] - V(states_ep[j])
+    #     advs[j] = adv
     return advs    
+    
 
 def model_validate():
     ep_reward = 0
@@ -77,7 +81,7 @@ BATCH_SIZE = 100
 GAMMA = 0.98
 LEARNING_RATE = 0.0005
 
-env = gym.make('CartPole-v0')
+env = gym.make('MountainCarContinuous-v0')
 
 n_actions = env.action_space.n
 state_length = env.observation_space.shape[0]
@@ -92,6 +96,7 @@ V_optimizer = torch.optim.Adam(V.parameters(), lr=LEARNING_RATE)
 
 # define loss
 loss_MSE = nn.MSELoss(reduction='sum').to(device)
+loss_NLL = nn.NLLLoss().to(device)
 
 training_rewards = []
 for k in range(K):
@@ -120,7 +125,7 @@ for k in range(K):
 
     states = torch.tensor(states, dtype=torch.float32).to(device)
     actions = torch.tensor(actions, dtype=torch.int64).to(device).unsqueeze(1)
-    # re-fit state-value function as a baseline
+    # re-fit state-value function
     V_optimizer.zero_grad() # clear gradient
     v_loss = loss_MSE(advantages, V(states).squeeze())
     v_loss.backward(retain_graph=True)
@@ -148,7 +153,6 @@ def smooth_reward(ep_reward, smooth_over):
 plt.plot(training_rewards)
 plt.show()
 
-# final validation after training
 ep_rewards = []
 for ii in range(100):
     ep_reward = model_validate()
