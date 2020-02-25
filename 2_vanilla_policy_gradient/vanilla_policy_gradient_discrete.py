@@ -9,8 +9,8 @@ import gym
 import numpy as np
 import matplotlib.pyplot as plt
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# device = torch.device("cpu")
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 
 # policy network
 class policy_network(nn.Module):
@@ -72,12 +72,12 @@ def model_validate():
         ob = ob_
     return ep_reward
 
-K = 2000
+K = 20000
 BATCH_SIZE = 100
-GAMMA = 0.98
+GAMMA = 0.95
 LEARNING_RATE = 0.0005
 
-env = gym.make('CartPole-v0')
+env = gym.make('MountainCar-v0')
 
 n_actions = env.action_space.n
 state_length = env.observation_space.shape[0]
