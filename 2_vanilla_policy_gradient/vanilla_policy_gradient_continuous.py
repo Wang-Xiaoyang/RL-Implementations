@@ -40,17 +40,17 @@ class state_value_network(nn.Module):
         x = self.fc3(x)
         return x
 
-def choose_action(ob, sigma, epsilon):
+def choose_action(ob):
     # choose action using current policy pi (continuous action space)
     # assume the variance of Gaussian policy \sigma = 1.0
     mean_a = pi(torch.tensor(ob, dtype=torch.float32).to(device)).detach()
     mean_a = mean_a.cpu().numpy()
-    a = np.random.normal(loc=mean_a, scale=sigma)
-    if np.random.uniform(0,1) >= epsilon:
-        a = a
-    else:
-        a = 2 * mean_a - a
-    return a
+    a = np.random.normal(loc=mean_a[0], scale=max(mean_a[1],0))
+    # if np.random.uniform(0,1) >= epsilon:
+    #     a = a
+    # else:
+    #     a = 2 * mean_a - a
+    return np.array([a])
 
 def compute_advantage(rewards, states, gamma):
     # get returns of states from a trajectory
@@ -66,12 +66,12 @@ def compute_advantage(rewards, states, gamma):
     advs = returns - V(states_ep).squeeze(1)
     return advs    
     
-def model_validate(sigma):
+def model_validate():
     ep_reward = 0
     ob = env.reset()
     done = False
     while not done:      
-        a = choose_action(ob, sigma, 0.0)
+        a = choose_action(ob)
         ob_, r, done, _ = env.step(a)
         ep_reward += r
         ob = ob_
@@ -79,7 +79,7 @@ def model_validate(sigma):
 
 K = 10000
 BATCH_SIZE = 50
-SIGMA = 1.0 # sigma of Gaussian policy
+SIGMA = 0.5 # sigma of Gaussian policy
 epsilon_max = 0.5
 epsilon_min = 0.0001
 # epsion_step = (epsilon_max - epsilon_min) / K
@@ -94,7 +94,7 @@ n_actions = env.action_space.shape[0]
 state_length = env.observation_space.shape[0]
 
 # initialize policy network and state-value network
-pi = policy_network_mean(input=state_length, output=n_actions).to(device)
+pi = policy_network_mean(input=state_length, output=2).to(device)
 V = state_value_network(input=state_length).to(device)
 
 # define optimizers
@@ -120,7 +120,7 @@ for k in range(K):
         step_e = 0 # allowed steps in one episode       
         while not done:
             if step_e < 200:
-                a = choose_action(ob, SIGMA, epsilon)
+                a = choose_action(ob)
                 ob_, r, done, _ = env.step(a)
                 # save trajectories
                 states.append(ob)
@@ -144,18 +144,18 @@ for k in range(K):
     V_optimizer.step()
     # update policy pi
     pi_optimizer.zero_grad()
-    log_pi = - (((actions - pi(states))/SIGMA)**2) / 2
+    std = [max(item,0) for item in pi(states)[:,1]]
+    std = torch.tensor(std, dtype=torch.float32).to(device)
+    log_pi = - ((((actions - pi(states)[:,0].unsqueeze(1))/std.unsqueeze(1)))**2) / 2
     pi_loss = - torch.sum(torch.mul(log_pi.squeeze(), advantages)) # negative: .backward() use gradient descent, (-loss) with gradient descnet = gradient ascent
     pi_loss.backward()
     pi_optimizer.step()
 
     # validate current policy
     if k % 50 == 0:
-        training_reward = model_validate(SIGMA)
+        training_reward = model_validate()
         training_rewards.append(training_reward)
-        print('Step: ', k, '  Total reward: ', training_reward, 'Epsilon: ', epsilon)
-    
-    epsilon -= epsilon_step
+        print('Step: ', k, '  Total reward: ', training_reward)
 
 # smmothed reward
 def smooth_reward(ep_reward, smooth_over):
@@ -170,6 +170,6 @@ plt.show()
 
 ep_rewards = []
 for ii in range(10):
-    ep_reward = model_validate(SIGMA)
+    ep_reward = model_validate()
     ep_rewards.append(ep_reward)
 print('Average rewards of last 10 eps: ', np.mean(ep_rewards))
