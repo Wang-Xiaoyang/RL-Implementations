@@ -1,5 +1,5 @@
-# Vanilla policy gradient using Pytorch
-# CartPole-v0 in Gym environment
+# Vanilla policy gradient using Pytorch, continuous action space
+# MountainCarContinuous-v0 in Gym environment
 # Algorithm can be found in https://spinningup.openai.com/en/latest/algorithms/vpg.html, http://joschu.net/docs/thesis.pdf
 
 import torch
@@ -7,12 +7,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import gym
 import numpy as np
+import math
 import matplotlib.pyplot as plt
 
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = torch.device("cpu")
 
-# policy network
+# policy network - gaussian mean and log(var)
 class policy_network(nn.Module):
     def __init__(self, input=4, hidden=64, output=2):
         super(policy_network, self).__init__()
@@ -23,10 +24,10 @@ class policy_network(nn.Module):
     def forward(self, input):
         x = F.relu(self.fc1(input))
         x = F.relu(self.fc2(x))
-        x = F.softmax(self.fc3(x))
+        x = self.fc3(x)
         return x
 
-# state-value estimator
+# state-value estimator (critic)
 class state_value_network(nn.Module):
     def __init__(self, input=4, hidden=64, output=1):
         super(state_value_network, self).__init__()
@@ -41,14 +42,25 @@ class state_value_network(nn.Module):
         return x
 
 def choose_action(ob):
-    # choose action using current policy pi (discrete action space)
-    probs = pi(torch.tensor(ob, dtype=torch.float32).to(device)).detach()
-    probs = probs.cpu().numpy()
-    a = np.random.choice(range(len(probs)), p=probs)
-    return a
+    # choose action using current policy pi (continuous action space)
+    gau_pars = pi(torch.tensor(ob, dtype=torch.float32).to(device)).detach()
+    gau_pars = gau_pars.cpu().numpy()
+    std = math.sqrt(math.exp(gau_pars[1]))
+    a = np.random.normal(loc=gau_pars[0], scale=std)
+    # if np.random.uniform(0,1) >= epsilon:
+    #     a = a
+    # else:
+    #     a = 2 * gau_pars[0] - a
+
+    # if a < 0:
+    #     a_env = 0
+    # else:
+    #     a_env = 1
+    return np.array([a])
+
 
 def compute_advantage(rewards, states, gamma):
-    # get returns of states from a trajectory as state-value
+    # get returns of states from a trajectory
     # R_t = r_t + gamma * r_{t+1} + gamma^2 * r_{t+2} + ...
     returns = rewards.copy()
     advs = rewards.copy()
@@ -60,7 +72,7 @@ def compute_advantage(rewards, states, gamma):
     returns = torch.tensor(returns, dtype=torch.float32).to(device)
     advs = returns - V(states_ep).squeeze(1)
     return advs    
-
+    
 def model_validate():
     ep_reward = 0
     ob = env.reset()
@@ -72,18 +84,22 @@ def model_validate():
         ob = ob_
     return ep_reward
 
-K = 2000
-BATCH_SIZE = 100
-GAMMA = 0.98
-LEARNING_RATE = 0.0005
+K = 1000000
+BATCH_SIZE = 200
+# epsilon_max = 0.2
+# epsilon_min = 0.001
+# epsilon_step = (epsilon_max - epsilon_min) / (1000)
+GAMMA = 0.95
+LEARNING_RATE = 0.005
 
-env = gym.make('CartPole-v0')
+env = gym.make('MountainCarContinuous-v0')
 
-n_actions = env.action_space.n
+# n_actions = env.action_space.shape[0]
+n_actions = 1
 state_length = env.observation_space.shape[0]
 
 # initialize policy network and state-value network
-pi = policy_network(input=state_length, output=n_actions).to(device)
+pi = policy_network(input=state_length, output=2).to(device)
 V = state_value_network(input=state_length).to(device)
 
 # define optimizers
@@ -91,8 +107,7 @@ pi_optimizer = torch.optim.Adam(pi.parameters(), lr=LEARNING_RATE)
 V_optimizer = torch.optim.Adam(V.parameters(), lr=LEARNING_RATE)
 
 # define loss
-loss_MSE = nn.MSELoss(reduction='sum').to(device)
-
+loss_MSE = nn.MSELoss(reduction='mean').to(device)
 training_rewards = []
 for k in range(K):
     # save trajectories
@@ -104,38 +119,46 @@ for k in range(K):
     while len(states) < BATCH_SIZE:
         ob = env.reset()
         done = False
-        rewards = []        
+        rewards = [] 
+        step_e = 0 # allowed steps in one episode       
         while not done:
-            a = choose_action(ob)
-            ob_, r, done, _ = env.step(a)
-            # save trajectories
-            states.append(ob)
-            actions.append(a)
-            rewards.append(r)
-            states_.append(ob_)
-            ob = ob_
+            if step_e < 200:
+                a = choose_action(ob)
+                ob_, r, done, _ = env.step(a)
+                # save trajectories
+                states.append(ob)
+                actions.append(a)
+                rewards.append(r)
+                states_.append(ob_)
+                ob = ob_
+                step_e += 1
+            else:
+                break
         # calculate discounted return and advantages
         advs = compute_advantage(rewards, states, GAMMA)
         advantages = torch.cat((advantages, advs), 0)
 
     states = torch.tensor(states, dtype=torch.float32).to(device)
-    actions = torch.tensor(actions, dtype=torch.int64).to(device).unsqueeze(1)
-    # re-fit state-value function as a baseline
+    actions = torch.tensor(actions, dtype=torch.float32).to(device)
+    # re-fit state-value function
     V_optimizer.zero_grad() # clear gradient
     v_loss = loss_MSE(advantages, V(states).squeeze())
     v_loss.backward(retain_graph=True)
     V_optimizer.step()
     # update policy pi
     pi_optimizer.zero_grad()
-    log_softmax = torch.log(pi(states).gather(1, actions))
-    pi_loss = torch.sum(- torch.mul(log_softmax.squeeze(1), advantages))
+    vars_ = torch.exp(pi(states)[:,1]).unsqueeze(1)
+    means =  pi(states)[:,0].unsqueeze(1)
+    log_pi = - (((actions - means)**2)/vars_/2) - torch.log(torch.sqrt(2*np.pi*vars_))
+    pi_loss = - torch.sum(torch.mul(log_pi.squeeze(), advantages)) # negative: .backward() use gradient descent, (-loss) with gradient descnet = gradient ascent
     pi_loss.backward()
     pi_optimizer.step()
 
     # validate current policy
-    training_reward = model_validate()
-    training_rewards.append(training_reward)
-    print('Step: ', k, '  Total reward: ', training_reward)
+    if k % 100 == 0:
+        training_reward = model_validate()
+        training_rewards.append(training_reward)
+        print('Step: ', k, '  Total reward: ', training_reward)
 
 # smmothed reward
 def smooth_reward(ep_reward, smooth_over):
@@ -148,9 +171,8 @@ def smooth_reward(ep_reward, smooth_over):
 plt.plot(training_rewards)
 plt.show()
 
-# final validation after training
 ep_rewards = []
-for ii in range(100):
-    ep_reward = model_validate()
+for ii in range(10):
+    ep_reward = model_validate(0.0)
     ep_rewards.append(ep_reward)
-print('Average rewards of last 100 eps: ', np.mean(ep_rewards))
+print('Average rewards of last 10 eps: ', np.mean(ep_rewards))

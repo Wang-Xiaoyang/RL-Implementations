@@ -12,10 +12,11 @@ import matplotlib.pyplot as plt
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = torch.device("cpu")
 
-# policy network - gaussian mean
-class policy_network_mean(nn.Module):
+# policy network - gaussian mean and std (output=2)
+# gaussian mean (output=1)
+class policy_network(nn.Module):
     def __init__(self, input=4, hidden=64, output=2):
-        super(policy_network_mean, self).__init__()
+        super(policy_network, self).__init__()
         self.fc1 = nn.Linear(input, hidden)
         self.fc2 = nn.Linear(hidden, hidden)
         self.fc3 = nn.Linear(hidden, output)
@@ -45,12 +46,12 @@ def choose_action(ob):
     # assume the variance of Gaussian policy \sigma = 1.0
     mean_a = pi(torch.tensor(ob, dtype=torch.float32).to(device)).detach()
     mean_a = mean_a.cpu().numpy()
-    a = np.random.normal(loc=mean_a[0], scale=max(mean_a[1],0))
-    # if np.random.uniform(0,1) >= epsilon:
-    #     a = a
+    a = np.random.normal(loc=mean_a, scale=1.0)
+    # if a < 0:
+    #     a_env = 0
     # else:
-    #     a = 2 * mean_a - a
-    return np.array([a])
+    #     a_env = 1
+    return np.array(a)
 
 def compute_advantage(rewards, states, gamma):
     # get returns of states from a trajectory
@@ -77,14 +78,10 @@ def model_validate():
         ob = ob_
     return ep_reward
 
-K = 10000
-BATCH_SIZE = 50
-SIGMA = 0.5 # sigma of Gaussian policy
-epsilon_max = 0.5
-epsilon_min = 0.0001
-# epsion_step = (epsilon_max - epsilon_min) / K
+K = 100000
+BATCH_SIZE = 500
 epsilon_step = 0.0
-GAMMA = 0.90
+GAMMA = 0.95
 LEARNING_RATE = 0.0005
 
 env = gym.make('MountainCarContinuous-v0')
@@ -94,7 +91,7 @@ n_actions = env.action_space.shape[0]
 state_length = env.observation_space.shape[0]
 
 # initialize policy network and state-value network
-pi = policy_network_mean(input=state_length, output=2).to(device)
+pi = policy_network(input=state_length, output=1).to(device)
 V = state_value_network(input=state_length).to(device)
 
 # define optimizers
@@ -102,10 +99,9 @@ pi_optimizer = torch.optim.Adam(pi.parameters(), lr=LEARNING_RATE)
 V_optimizer = torch.optim.Adam(V.parameters(), lr=LEARNING_RATE)
 
 # define loss
-loss_MSE = nn.MSELoss(reduction='sum').to(device)
+loss_MSE = nn.MSELoss(reduction='mean').to(device)
 
 training_rewards = []
-epsilon = epsilon_max
 for k in range(K):
     # save trajectories
     states = []
@@ -143,26 +139,17 @@ for k in range(K):
     v_loss.backward(retain_graph=True)
     V_optimizer.step()
     # update policy pi
-    pi_optimizer.zero_grad()
-    std = [max(item,0) for item in pi(states)[:,1]]
-    std = torch.tensor(std, dtype=torch.float32).to(device)
-    log_pi = - ((((actions - pi(states)[:,0].unsqueeze(1))/std.unsqueeze(1)))**2) / 2
+    pi_optimizer.zero_grad()    
+    log_pi = - (((actions - pi(states)))**2) / 2
     pi_loss = - torch.sum(torch.mul(log_pi.squeeze(), advantages)) # negative: .backward() use gradient descent, (-loss) with gradient descnet = gradient ascent
     pi_loss.backward()
     pi_optimizer.step()
 
     # validate current policy
-    if k % 50 == 0:
+    if k % 100 == 0:
         training_reward = model_validate()
         training_rewards.append(training_reward)
         print('Step: ', k, '  Total reward: ', training_reward)
-
-# smmothed reward
-def smooth_reward(ep_reward, smooth_over):
-    smoothed_r = []
-    for ii in range(smooth_over, len(ep_reward)):
-        smoothed_r.append(np.mean(ep_reward[ii-smooth_over:ii]))
-    return smoothed_r
 
 # plt.plot(smooth_reward(ep_rewards, 50))
 plt.plot(training_rewards)
@@ -173,3 +160,4 @@ for ii in range(10):
     ep_reward = model_validate()
     ep_rewards.append(ep_reward)
 print('Average rewards of last 10 eps: ', np.mean(ep_rewards))
+# Vanilla policy gradient using Pytorch, continuous action space
