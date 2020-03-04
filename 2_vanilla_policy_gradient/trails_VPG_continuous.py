@@ -126,6 +126,8 @@ for k in range(K):
     # calculate discounted return and advantages
     advs = compute_advantage(rewards, states, GAMMA)
     advantages = torch.cat((advantages, advs), 0)
+    weight = torch.tensor([1.0] * len(rewards), dtype=torch.float32).to(device)
+    advantages = torch.mul(advantages, weight)
 
     states = torch.tensor(states, dtype=torch.float32).to(device)
     actions = torch.tensor(actions, dtype=torch.float32).to(device)
@@ -147,11 +149,11 @@ for k in range(K):
         print('Step: ', k, '  Total reward: ', ep_reward)
 
 plt.plot(training_rewards)
-plt.title('VPG(a)')
+plt.title('VPG(weights)')
 plt.show()
 
 # save model
-path = './vpg/vpg.pt'
+path = './vpg_w/vpg_w.pt'
 torch.save({
             'policy_model': pi.state_dict(),
             'critic_model': V.state_dict(),
