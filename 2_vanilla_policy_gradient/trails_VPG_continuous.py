@@ -7,13 +7,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import gym
 import numpy as np
-import math
 import matplotlib.pyplot as plt
 
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = torch.device("cpu")
 
-# policy network - gaussian mean and log(var)
+# policy network - gaussian mean and std (output=2)
+# gaussian mean (output=1)
 class policy_network(nn.Module):
     def __init__(self, input=4, hidden=64, output=2):
         super(policy_network, self).__init__()
@@ -41,23 +41,17 @@ class state_value_network(nn.Module):
         x = self.fc3(x)
         return x
 
-def choose_action(ob):
+def choose_action(ob, policy_net):
     # choose action using current policy pi (continuous action space)
-    gau_pars = pi(torch.tensor(ob, dtype=torch.float32).to(device)).detach()
-    gau_pars = gau_pars.cpu().numpy()
-    std = math.sqrt(math.exp(gau_pars[1]))
-    a = np.random.normal(loc=gau_pars[0], scale=std)
-    # if np.random.uniform(0,1) >= epsilon:
-    #     a = a
-    # else:
-    #     a = 2 * gau_pars[0] - a
-
+    # assume the variance of Gaussian policy \sigma = 1.0
+    mean_a = policy_net(torch.tensor(ob, dtype=torch.float32).to(device)).detach()
+    mean_a = mean_a.cpu().numpy()
+    a = np.random.normal(loc=mean_a, scale=1.0)
     # if a < 0:
     #     a_env = 0
     # else:
     #     a_env = 1
-    return np.array([a])
-
+    return np.array(a)
 
 def compute_advantage(rewards, states, gamma):
     # get returns of states from a trajectory
@@ -73,33 +67,31 @@ def compute_advantage(rewards, states, gamma):
     advs = returns - V(states_ep).squeeze(1)
     return advs    
     
-def model_validate():
+def model_validate(policy_net):
     ep_reward = 0
     ob = env.reset()
     done = False
-    while not done:      
-        a = choose_action(ob)
+    while not done:
+        env.render()      
+        a = choose_action(ob, policy_net)
         ob_, r, done, _ = env.step(a)
         ep_reward += r
         ob = ob_
     return ep_reward
 
-K = 1000000
-BATCH_SIZE = 200
-# epsilon_max = 0.2
-# epsilon_min = 0.001
-# epsilon_step = (epsilon_max - epsilon_min) / (1000)
+K = 10000
+# BATCH_SIZE = 500
 GAMMA = 0.95
-LEARNING_RATE = 0.005
+LEARNING_RATE = 0.0005
 
 env = gym.make('MountainCarContinuous-v0')
 
-# n_actions = env.action_space.shape[0]
-n_actions = 1
+n_actions = env.action_space.shape[0]
+# n_actions = 1
 state_length = env.observation_space.shape[0]
 
 # initialize policy network and state-value network
-pi = policy_network(input=state_length, output=2).to(device)
+pi = policy_network(input=state_length, output=1).to(device)
 V = state_value_network(input=state_length).to(device)
 
 # define optimizers
@@ -108,6 +100,7 @@ V_optimizer = torch.optim.Adam(V.parameters(), lr=LEARNING_RATE)
 
 # define loss
 loss_MSE = nn.MSELoss(reduction='mean').to(device)
+
 training_rewards = []
 for k in range(K):
     # save trajectories
@@ -116,27 +109,25 @@ for k in range(K):
     states_ = []
     advantages = torch.tensor([], dtype=torch.float32).to(device)
     # collect trajectories
-    while len(states) < BATCH_SIZE:
-        ob = env.reset()
-        done = False
-        rewards = [] 
-        step_e = 0 # allowed steps in one episode       
-        while not done:
-            if step_e < 200:
-                a = choose_action(ob)
-                ob_, r, done, _ = env.step(a)
-                # save trajectories
-                states.append(ob)
-                actions.append(a)
-                rewards.append(r)
-                states_.append(ob_)
-                ob = ob_
-                step_e += 1
-            else:
-                break
-        # calculate discounted return and advantages
-        advs = compute_advantage(rewards, states, GAMMA)
-        advantages = torch.cat((advantages, advs), 0)
+    ob = env.reset()
+    done = False
+    rewards = []
+    ep_reward = 0.0       
+    while not done:
+        a = choose_action(ob, pi)
+        ob_, r, done, _ = env.step(a)
+        # save trajectories
+        states.append(ob)
+        actions.append(a)
+        rewards.append(r)
+        states_.append(ob_)
+        ob = ob_
+        ep_reward += r
+    # calculate discounted return and advantages
+    advs = compute_advantage(rewards, states, GAMMA)
+    advantages = torch.cat((advantages, advs), 0)
+    weight = torch.tensor([1.0] * len(rewards), dtype=torch.float32).to(device)
+    advantages = torch.mul(advantages, weight)
 
     states = torch.tensor(states, dtype=torch.float32).to(device)
     actions = torch.tensor(actions, dtype=torch.float32).to(device)
@@ -146,34 +137,44 @@ for k in range(K):
     v_loss.backward(retain_graph=True)
     V_optimizer.step()
     # update policy pi
-    pi_optimizer.zero_grad()
-    vars_ = torch.exp(pi(states)[:,1]).unsqueeze(1)
-    means =  pi(states)[:,0].unsqueeze(1)
-    log_pi = - (((actions - means)**2)/vars_/2) - torch.log(torch.sqrt(2*np.pi*vars_))
+    pi_optimizer.zero_grad()    
+    log_pi = - (((actions - pi(states)))**2) / 2
     pi_loss = - torch.sum(torch.mul(log_pi.squeeze(), advantages)) # negative: .backward() use gradient descent, (-loss) with gradient descnet = gradient ascent
     pi_loss.backward()
     pi_optimizer.step()
 
-    # validate current policy
+    # print training process
+    training_rewards.append(ep_reward)
     if k % 100 == 0:
-        training_reward = model_validate()
-        training_rewards.append(training_reward)
-        print('Step: ', k, '  Total reward: ', training_reward)
-        # re-fit state-value network (critic)
+        print('Step: ', k, '  Total reward: ', ep_reward)
 
-# smmothed reward
-def smooth_reward(ep_reward, smooth_over):
-    smoothed_r = []
-    for ii in range(smooth_over, len(ep_reward)):
-        smoothed_r.append(np.mean(ep_reward[ii-smooth_over:ii]))
-    return smoothed_r
-
-# plt.plot(smooth_reward(ep_rewards, 50))
 plt.plot(training_rewards)
+plt.title('VPG(weights)')
 plt.show()
 
+# save model
+path = './vpg_w/vpg_w.pt'
+torch.save({
+            'policy_model': pi.state_dict(),
+            'critic_model': V.state_dict(),
+            'optimizer_policy_model': pi_optimizer.state_dict(),
+            'optimizer_critic_model': V_optimizer.state_dict(),
+            }, path)
+# load model
+pi_ = policy_network(input=state_length, output=1)
+V_ = state_value_network(input=state_length, output=1)
+pi_optimizer_ = torch.optim.Adam(pi_.parameters())
+V_optimizer_ = torch.optim.Adam(V_.parameters())
+
+checkpoint = torch.load(path)
+pi_.load_state_dict(checkpoint['policy_model'])
+V_.load_state_dict(checkpoint['critic_model'])
+pi_optimizer_.load_state_dict(checkpoint['optimizer_policy_model'])
+V_optimizer_.load_state_dict(checkpoint['optimizer_critic_model'])
+
+# validate
 ep_rewards = []
 for ii in range(10):
-    ep_reward = model_validate(0.0)
+    ep_reward = model_validate(pi_)
     ep_rewards.append(ep_reward)
 print('Average rewards of last 10 eps: ', np.mean(ep_rewards))
