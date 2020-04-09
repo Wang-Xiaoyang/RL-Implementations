@@ -16,6 +16,7 @@ from save_model import SaveModel
 
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = torch.device("cpu")
+SAVE = True
 
 K = 10000
 eps = 5 # episodes when collecting samples
@@ -134,16 +135,20 @@ for k in range(K):
 plt.plot(training_rewards)
 plt.title('ppo - training rewards')
 plt.show()
+plt.savefig('./ppo/training_rewards.png')
+
 # save model
-model_entities = SaveModel()
-path = './ppo/ppo.pt'
-networks = [pi, V]
-networks_name = ['policy_model', 'value_model']
-optims = [pi_optimizer, V_optimizer]
-optims_name = ['optimizer_policy_model', 'optimizer_value_model']
-model_entities.save_model(path, networks, networks_name, optims, optims_name)
+if SAVE:
+    model_entities = SaveModel()
+    path = './ppo/ppo.pt'
+    networks = [pi, V]
+    networks_name = ['policy_model', 'value_model']
+    optims = [pi_optimizer, V_optimizer]
+    optims_name = ['optimizer_policy_model', 'optimizer_value_model']
+    model_entities.save_model(path, networks, networks_name, optims, optims_name)
 
 # load and render
+model_entities = SaveModel()
 pi_ = policy_network(input=state_length, output=n_actions).to(device)
 V_ = state_value_network(input=state_length).to(device)
 pi_optimizer_ = torch.optim.Adam(pi.parameters(), lr=LEARNING_RATE)
