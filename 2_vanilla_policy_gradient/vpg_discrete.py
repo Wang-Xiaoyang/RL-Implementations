@@ -8,6 +8,8 @@ import torch.nn.functional as F
 import gym
 import numpy as np
 import matplotlib.pyplot as plt
+from torch.distributions.categorical import Categorical
+import scipy.signal
 
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = torch.device("cpu")
@@ -40,33 +42,56 @@ class state_value_network(nn.Module):
         x = self.fc3(x)
         return x
 
-def choose_action(ob):
-    # choose action using current policy pi (discrete action space)
-    probs = pi(torch.tensor(ob, dtype=torch.float32).to(device)).detach()
-    probs = probs.cpu().numpy()
-    a = np.random.choice(range(len(probs)), p=probs)
-    return a
+def discount_cumsum(x, discount):
+    """
+    magic from rllab for computing discounted cumulative sums of vectors.
 
-def compute_advantage(rewards, states, gamma):
+    input: 
+        vector x, 
+        [x0, 
+         x1, 
+         x2]
+
+    output:
+        [x0 + discount * x1 + discount^2 * x2,  
+         x1 + discount * x2,
+         x2]
+    """
+    return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
+
+def pi_step(ob):
+    # choose action using current policy pi (discrete action space)
+    ob = torch.as_tensor(ob, dtype=torch.float32).to(device)
+    probs = pi(ob).detach()
+    pi_ = Categorical(probs)
+    a = pi_.sample().unsqueeze(0)
+    v = V(ob).detach()
+    return a.numpy()[0], v.numpy()[0]
+
+def gae_advantage(rewards, states, vals, gamma, lam):
     # get returns of states from a trajectory as state-value
     # R_t = r_t + gamma * r_{t+1} + gamma^2 * r_{t+2} + ...
-    returns = rewards.copy()
-    advs = rewards.copy()
-    states_ep = states.copy()[-len(rewards):]
-    for i in reversed(range(len(returns)-1)):
-        r = returns[i] + gamma * returns[i+1]
-        returns[i] = r
-    states_ep = torch.tensor(states_ep, dtype=torch.float32).to(device)
-    returns = torch.tensor(returns, dtype=torch.float32).to(device)
-    advs = returns - V(states_ep).squeeze(1)
-    return advs    
+    deltas = rewards[:-1] + gamma * vals[1:] - vals[:-1]
+    advs = discount_cumsum(deltas, gamma * lam)
+    return np.float32(advs)   
+
+def reward_to_go(rewards, gamma):
+    rtg = np.float32(discount_cumsum(rewards, gamma)[:-1])
+    return rtg
+
+def compute_loss_pi(states, actions, advs):
+    probs = pi(states)
+    # Note that this is equivalent to what used to be called multinomial
+    m = Categorical(probs)
+    loss = - torch.sum(torch.mul(m.log_prob(actions), advs))
+    return loss
 
 def model_validate():
     ep_reward = 0
     ob = env.reset()
     done = False
     while not done:      
-        a = choose_action(ob)
+        a, _ = pi_step(ob)
         ob_, r, done, _ = env.step(a)
         ep_reward += r
         ob = ob_
@@ -75,6 +100,7 @@ def model_validate():
 K = 2000
 BATCH_SIZE = 100
 GAMMA = 0.98
+LAM = 0.97
 LEARNING_RATE = 0.0005
 
 env = gym.make('CartPole-v0')
@@ -98,37 +124,40 @@ for k in range(K):
     # save trajectories
     states = []
     actions = []
-    states_ = []
-    advantages = torch.tensor([], dtype=torch.float32).to(device)
+    rewards = []
+    vals = []
     # collect trajectories
-    while len(states) < BATCH_SIZE:
-        ob = env.reset()
-        done = False
-        rewards = []        
-        while not done:
-            a = choose_action(ob)
-            ob_, r, done, _ = env.step(a)
-            # save trajectories
-            states.append(ob)
-            actions.append(a)
-            rewards.append(r)
-            states_.append(ob_)
-            ob = ob_
-        # calculate discounted return and advantages
-        advs = compute_advantage(rewards, states, GAMMA)
-        advantages = torch.cat((advantages, advs), 0)
+    ob = env.reset()
+    done = False        
+    while not done:
+        a, v = pi_step(ob)
+        ob_, r, done, _ = env.step(a)
+        # save trajectories
+        states.append(ob)
+        actions.append(a)
+        rewards.append(r)
+        vals.append(v)
+        ob = ob_
+    
+    # calculate discounted return and advantages
+    rewards, states, vals = np.array(rewards), np.array(states), np.array(vals)
+    advs = gae_advantage(rewards, states, vals, GAMMA, LAM)
+    rtg = reward_to_go(rewards, GAMMA)
 
-    states = torch.tensor(states, dtype=torch.float32).to(device)
-    actions = torch.tensor(actions, dtype=torch.int64).to(device).unsqueeze(1)
+    states = torch.tensor(states[:-1], dtype=torch.float32).to(device)
+    actions = torch.tensor(actions[:-1], dtype=torch.float32).to(device)
+    vals = torch.tensor(vals[:-1], dtype=torch.float32).to(device)
+    rtg = torch.tensor(rtg, dtype=torch.float32).to(device)
+    advs = torch.tensor(advs, dtype=torch.float32).to(device)
+
     # re-fit state-value function as a baseline
     V_optimizer.zero_grad() # clear gradient
-    v_loss = loss_MSE(advantages, V(states).squeeze())
+    v_loss = loss_MSE(rtg, V(states).squeeze())
     v_loss.backward(retain_graph=True)
     V_optimizer.step()
     # update policy pi
     pi_optimizer.zero_grad()
-    log_softmax = torch.log(pi(states).gather(1, actions))
-    pi_loss = torch.sum(- torch.mul(log_softmax.squeeze(1), advantages))
+    pi_loss = compute_loss_pi(states, actions, advs)
     pi_loss.backward()
     pi_optimizer.step()
 

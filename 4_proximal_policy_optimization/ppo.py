@@ -13,17 +13,28 @@ import matplotlib.pyplot as plt
 from policy_gradient_entities import policy_network_continuous as policy_network
 from policy_gradient_entities import policy_gradient_comm_func, state_value_network
 from save_model import SaveModel
+import wandb
+
+wandb.init(project="rl-implementation-basics-ppo")
+# wandb config parameters
+wandb.config.training_eps = int(1000)
+wandb.config.gamma = 0.99
+wandb.config.lr = 1e-5
+wandb.config.batch_size = 100
+wandb.config.epsilon = 0.1 # clip ratio
+wandb.config.N = 2 # iters to update pi
+config = wandb.config
 
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = torch.device("cpu")
 SAVE = True
 
-K = 10000
-eps = 5 # episodes when collecting samples
-BATCH_SIZE = 100
-GAMMA = 0.98
-EPSILON = 0.2
-LEARNING_RATE = 0.0005
+K = config.training_eps
+N = config.N # 
+BATCH_SIZE = config.batch_size
+GAMMA = config.gamma
+EPSILON = config.epsilon
+LEARNING_RATE = config.lr
 
 env = gym.make('MountainCarContinuous-v0')
 
@@ -83,7 +94,6 @@ def clip(ratio, advs, epsilon):
     return clipped_advs
 
 # training
-training_rewards = []
 for k in range(K):
     ob = env.reset()
     done = False
@@ -110,15 +120,15 @@ for k in range(K):
     actions = torch.tensor(actions, dtype=torch.float32).to(device)
     returns = torch.tensor(returns, dtype=torch.float32).to(device)
     advs = compute_advantage(returns, states, V)
-
-    s_a_old = state_action_prob(states, actions, pi_old)
-    s_a_new = state_action_prob(states, actions, pi)
-    ratio = s_a_new / s_a_old
-    # update policy
-    pi_optimizer.zero_grad()
-    pi_loss = - torch.mean(clip(ratio, advs, EPSILON))    
-    pi_loss.backward(retain_graph=True)
-    pi_optimizer.step()
+    for j in range(N):
+        s_a_old = state_action_prob(states, actions, pi_old)
+        s_a_new = state_action_prob(states, actions, pi)
+        ratio = s_a_new / (s_a_old + 1e-9)
+        # update policy
+        pi_optimizer.zero_grad()
+        pi_loss = - torch.mean(clip(ratio, advs, EPSILON))    
+        pi_loss.backward(retain_graph=True)
+        pi_optimizer.step()
     # update pi_old
     pi_old.load_state_dict(pi.state_dict())
     # re-fit state-value function
@@ -128,14 +138,9 @@ for k in range(K):
     V_optimizer.step()
 
     # print training process
-    training_rewards.append(ep_reward)
-    if k % 50 == 0:
-        print('Step: ', k, '  Total reward: ', ep_reward)
-
-plt.plot(training_rewards)
-plt.title('ppo - training rewards')
-plt.show()
-plt.savefig('./ppo/training_rewards.png')
+    wandb.log({"ep reward(training)": ep_reward,
+                "v_net loss": v_loss,
+                "pi loss": pi_loss})
 
 # save model
 if SAVE:
@@ -146,6 +151,10 @@ if SAVE:
     optims = [pi_optimizer, V_optimizer]
     optims_name = ['optimizer_policy_model', 'optimizer_value_model']
     model_entities.save_model(path, networks, networks_name, optims, optims_name)
+
+    wandb.save('./ppo/ppo.pt')
+    wandb.save('../logs/*ckpt*')
+    wandb.save(os.path.join(wandb.run.dir, "checkpoint*"))
 
 # load and render
 model_entities = SaveModel()
