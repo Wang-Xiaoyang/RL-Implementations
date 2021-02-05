@@ -113,10 +113,10 @@ for ii in range(N_EPS):
         actions = torch.cuda.LongTensor([item[1] for item in batch]).to(device)
         rewards = torch.FloatTensor([item[2] for item in batch]).to(device)
         states_ = torch.FloatTensor([item[3] for item in batch]).to(device)
-        done = [item[4] for item in batch]
+        done_flags = [item[4] for item in batch]
 
         # if next state is the terminal state
-        non_final_mask = torch.tensor(list(map(lambda s: s is not True, done)), dtype=torch.float32).to(device) #
+        non_final_mask = torch.tensor(list(map(lambda s: s is not True, done_flags)), dtype=torch.float32).to(device) #
         next_q_values = Q_(states_).max(1)[0].detach()
         q_targets = rewards + GAMMA * torch.mul(next_q_values, non_final_mask).to(device) 
         q_targets = torch.unsqueeze(q_targets, 1).to(device)
