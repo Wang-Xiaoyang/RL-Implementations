@@ -19,10 +19,10 @@ wandb.init(project="rl-implementation-basics-ppo")
 # wandb config parameters
 wandb.config.training_eps = int(1000)
 wandb.config.gamma = 0.99
-wandb.config.lr = 1e-5
+wandb.config.lr = 1e-2
 wandb.config.batch_size = 100
 wandb.config.epsilon = 0.1 # clip ratio
-wandb.config.N = 2 # iters to update pi
+wandb.config.N = 5 # iters to update pi
 config = wandb.config
 
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -105,6 +105,8 @@ for k in range(K):
     # collect samples        
     while not done:
         a = pg_comm.choose_action_continuous(ob)
+        # clamping action to avoid messing up with epsodic reward
+        a = np.array([max(min(a[0], env.action_space.high[0]), env.action_space.low[0])])
         ob_, r, done, _ = env.step(a)
         # save trajectories
         states.append(ob)
@@ -132,10 +134,11 @@ for k in range(K):
     # update pi_old
     pi_old.load_state_dict(pi.state_dict())
     # re-fit state-value function
-    V_optimizer.zero_grad() # clear gradient
-    v_loss = loss_MSE(returns, V(states).squeeze())
-    v_loss.backward(retain_graph=True)
-    V_optimizer.step()
+    for j in range(N):
+        V_optimizer.zero_grad() # clear gradient
+        v_loss = loss_MSE(returns, V(states).squeeze())
+        v_loss.backward(retain_graph=True)
+        V_optimizer.step()
 
     # print training process
     wandb.log({"ep reward(training)": ep_reward,
